@@ -1,0 +1,15 @@
+AGRICULTURE MAP SENARYO/FEATURES
+
+
+Interactive Color-Coded Map Overlays - Ang MAP may kulay depende sa pananim
+Barangay-Level Filtering & Search - kung pipiliin nila ang "Brgy. Putat," mag-zo-zoom ang mapa doon at itatago ang ibang lugar para mag-focus lang sa mismong barangay.
+Crops Population - Ma-a-access nila ang impormasyon kung anong pananim ang masyado nang marami sa kanilang paligid.
+Crop Identification   - Hindi na sila manghuhula kung nasaan ang mga pananim. 
+Plantation Area in Hectares– ipapakita kung gano nkalawak ang plantation sa isang barangay.
+Crop Type Filtering – Puwedeng piliin ng user kung anong crop ang gusto nilang makita. Halimbawa, Palay only, kaya lahat ng areas na may palay lang ang ipapakita sa mapa.
+Crop Comparison – Puwedeng i-compare ang plantation area ng iba't ibang crops. Halimbawa, makikita kung mas malaki ang area ng palay kaysa mais sa isang barangay
+Most Common Crop – Automatically ipapakita kung ano ang pinakamaraming pananim sa isang barangay based sa available mapped area/data
+ Barangay Comparison – Puwedeng mag-compare ng agricultural data ng dalawang barangay o higit pa para makita ang differences sa crops at plantation areas.
+Agriculture Dashboard – May dashboard na nagpapakita ng important statistics,.
+
+
