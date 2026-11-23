@@ -213,7 +213,7 @@ class MainActivity : Activity() {
         }
 
         subtitleText = TextView(this).apply {
-            text = "Pindutin kahit saan sa mapa para sa GPS coordinates"
+            text = "Tap anywhere on the map to get GPS coordinates"
             textSize = 10f
             setTextColor(Color.parseColor("#137333"))
             setTypeface(null, Typeface.BOLD)
@@ -833,9 +833,9 @@ class MainActivity : Activity() {
             val universalUrl = "https://www.google.com/maps/@?api=1&map_action=map&center=$lat,$lng&zoom=$zoomLevel&basemap=$basemap"
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(universalUrl)))
         } catch (e: ActivityNotFoundException) {
-            Toast.makeText(this, "Walang naka-install na Google Maps o Browser sa device.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No Google Maps or Browser app installed on this device.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            Toast.makeText(this, "Hindi mabuksan ang mapa: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Unable to open map: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -844,9 +844,9 @@ class MainActivity : Activity() {
             val directionsUrl = "https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving"
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(directionsUrl)))
         } catch (e: ActivityNotFoundException) {
-            Toast.makeText(this, "Walang naka-install na Google Maps o Browser para sa directions.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No Google Maps or Browser app installed for directions.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            Toast.makeText(this, "Hindi mabuksan ang directions: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Unable to open directions: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
     }
 
