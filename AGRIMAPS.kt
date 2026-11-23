@@ -4,17 +4,10 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.app.Activity
 import android.app.ActivityManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.Rect
-import android.graphics.RectF
 import android.graphics.Typeface
-import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
@@ -31,19 +24,21 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import com.example.myapplication.data.NasugbuData
+import com.example.myapplication.map.MapGraphics
+import com.example.myapplication.map.MapTileSources
+import com.example.myapplication.model.Farm
+import com.example.myapplication.ui.AuthScreens
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
-import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
@@ -51,55 +46,14 @@ import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.gestures.RotationGestureOverlay
 import org.osmdroid.views.overlay.infowindow.InfoWindow
 import java.io.File
-import java.text.NumberFormat
 import java.util.Locale
-import kotlin.math.max
-import kotlin.math.sqrt
-
-class Farm(
-    val name: String,
-    val crop: String,
-    val squareMeters: Long,
-    val lat: Double,
-    val lng: Double,
-    val mergedParcels: Int = 1
-) {
-    fun shortAreaLabel(): String {
-        val hectares = squareMeters / 10_000.0
-        val formattedSqm = NumberFormat.getNumberInstance(Locale.US).format(squareMeters)
-        return String.format(Locale.US, "%.1f ha (%s sqm)", hectares, formattedSqm)
-    }
-
-    fun formattedArea(): String {
-        val formattedSqm = NumberFormat.getNumberInstance(Locale.US).format(squareMeters)
-        val hectares = squareMeters / 10_000.0
-        val formattedHa = String.format(Locale.US, "%.1f", hectares)
-        return "$formattedHa ha ($formattedSqm sq. m)"
-    }
-
-    fun distanceFromTownKm(): String {
-        val townProper = GeoPoint(14.0728, 120.6336)
-        val barangayPoint = GeoPoint(lat, lng)
-        val meters = townProper.distanceToAsDouble(barangayPoint)
-        return String.format(Locale.US, "%.1f km from Town Proper", meters / 1000.0)
-    }
-
-    fun formattedLat(): String = String.format(Locale.US, "%.4f", lat)
-    fun formattedLng(): String = String.format(Locale.US, "%.4f", lng)
-
-    fun displayInfo(): String {
-        val parcelNote = if (mergedParcels > 1) " ($mergedParcels combined records)" else ""
-        return "Brgy. $name, Nasugbu, Batangas$parcelNote\n" +
-                "Crops: $crop\n" +
-                "Land Area: ${formattedArea()}\n" +
-                "Distance: ${distanceFromTownKm()}  |  GPS: ${formattedLat()}° N, ${formattedLng()}° E"
-    }
-}
 
 class MainActivity : Activity() {
 
     private lateinit var mapView: MapView
     private lateinit var mapContainer: FrameLayout
+    private lateinit var topControlsContainer: LinearLayout
+    private lateinit var btnToggleTopBar: Button
     private lateinit var searchInput: EditText
     private lateinit var btnToggleLabels: Button
     private lateinit var btnStreetView: Button
@@ -110,159 +64,30 @@ class MainActivity : Activity() {
     private lateinit var infoLabel: TextView
     private lateinit var result: TextView
     private lateinit var resultScroll: ScrollView
+    private lateinit var subtitleText: TextView
 
     private lateinit var mainMapScreen: LinearLayout
+    private lateinit var loginScreen: LinearLayout
 
+    private lateinit var farms: MutableList<Farm>
     private var selectedFarm: Farm? = null
+    private var tappedCustomPoint: GeoPoint? = null
     private var activeCropFilter: String = "ALL"
     private var activeSearchQuery: String = ""
     private var showMapLabels: Boolean = false
+    private var isTopBarHidden: Boolean = false
     private var mapModeIndex: Int = 0
     private val filterButtons = mutableMapOf<String, Button>()
     private var splashDismissed = false
-
-    // Mahigpit na hangganan (boundary) ng buong Nasugbu, Batangas lamang
-    private val nasugbuBounds = BoundingBox(
-        14.2320,  // North
-        120.8080, // East
-        14.0220,  // South
-        120.5920  // West
-    )
-
-    private val nasugbuCenter = GeoPoint(14.1150, 120.6950)
-
-    private val nasugbuPolygonPoints = listOf(
-        GeoPoint(14.2240, 120.6140),
-        GeoPoint(14.2120, 120.6950),
-        GeoPoint(14.1520, 120.7780),
-        GeoPoint(14.1020, 120.8020),
-        GeoPoint(14.0620, 120.7760),
-        GeoPoint(14.0300, 120.6980),
-        GeoPoint(14.0320, 120.6220),
-        GeoPoint(14.0720, 120.6180),
-        GeoPoint(14.1050, 120.6080),
-        GeoPoint(14.1520, 120.6060),
-        GeoPoint(14.1980, 120.6040),
-        GeoPoint(14.2240, 120.6140)
-    )
-
-    private val satelliteTileSource = object : OnlineTileSourceBase(
-        "EsriWorldImagery",
-        0,
-        16,
-        256,
-        ".jpg",
-        arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/")
-    ) {
-        override fun getTileURLString(pMapTileIndex: Long): String {
-            val z = MapTileIndex.getZoom(pMapTileIndex)
-            val x = MapTileIndex.getX(pMapTileIndex)
-            val y = MapTileIndex.getY(pMapTileIndex)
-            return "$baseUrl$z/$y/$x"
-        }
-    }
-
-    private fun createDefaultRawFarms(): List<Farm> = listOf(
-        // Northern & Western Coastal Barangays
-        Farm("Papaya", "Coconut, Mango & Banana", 2_100_000L, 14.1992, 120.6178),
-        Farm("Looc", "Coconut, Upland Rice & Banana", 2_750_000L, 14.1658, 120.6335),
-        Farm("Calayo", "Coconut, Root Crops & Coastal Fishery", 1_900_000L, 14.1502, 120.6172),
-        Farm("Natipuan", "Coconut, Mango & Cashew", 2_350_000L, 14.1305, 120.6228),
-        Farm("Balaytigue", "Coconut, Cashew & Banana", 2_450_000L, 14.1112, 120.6258),
-        Farm("Bulihan", "Corn, Vegetables & Coconut", 2_900_000L, 14.1585, 120.6545),
-        Farm("Wawa", "Coastal Fishery, Nipa & Salt/Crops", 1_450_000L, 14.0868, 120.6258),
-        Farm("Pantalan", "Irrigated Rice & Leafy Vegetables", 2_250_000L, 14.0815, 120.6315),
-        Farm("Bucana", "Nipa, Coconut & Estuarine Crops", 1_150_000L, 14.0668, 120.6318),
-
-        // Central Sugarcane & Irrigated Rice Plains
-        Farm("Putat", "Sugarcane, Coconut & Cacao", 2_600_000L, 14.0825, 120.6585),
-        Farm("Dayap", "Sugarcane & Corn", 3_800_000L, 14.0985, 120.6655),
-        Farm("Lumbangan", "Sugarcane & Irrigated Rice", 3_500_000L, 14.0738, 120.6462),
-        Farm("Reparo", "Irrigated Rice & Sugarcane", 2_550_000L, 14.0695, 120.6885),
-        Farm("Bunducan", "Sugarcane & Banana", 2_950_000L, 14.0952, 120.6430),
-        Farm("Banilad", "Irrigated Rice & Sugarcane", 4_200_000L, 14.0852, 120.7338),
-        Farm("Malapad na Bato", "Sugarcane & Corn", 3_150_000L, 14.1105, 120.6885),
-
-        // Eastern Uplands & Tagaytay Ridge
-        Farm("Mataas na Pulo", "Coffee, Cacao & Banana", 3_250_000L, 14.1322, 120.7215),
-        Farm("Utod", "Corn, Cassava & Saba Banana", 3_100_000L, 14.1245, 120.6638),
-        Farm("Aga", "Highland Vegetables, Coffee & Sayote", 3_400_000L, 14.0949, 120.7963),
-        Farm("Kaylaway", "Pineapple, Coffee & Banana", 3_600_000L, 14.0982, 120.7795),
-        Farm("Kayrilaw", "Pineapple, Sweet Potato & Coffee", 2_950_000L, 14.1018, 120.7865),
-        Farm("Tumalim", "Sugarcane, Upland Rice & Banana", 3_300_000L, 14.0768, 120.7525),
-
-        // Southern Barangays
-        Farm("Latag", "Sugarcane & Lowland Rice", 2_850_000L, 14.0585, 120.6815),
-        Farm("Catandaan", "Irrigated Rice & Vegetables", 2_400_000L, 14.0495, 120.6458),
-        Farm("Talangan", "Irrigated Rice & Watermelon", 2_300_000L, 14.0755, 120.6305),
-        Farm("San Diego", "Coconut, Rice & Bamboo", 2_150_000L, 14.0352, 120.6335),
-        Farm("Maugat", "Sugarcane, Rice & Mango", 2_700_000L, 14.0835, 120.6785),
-        Farm("Camastilisan", "Sugarcane & Irrigated Rice", 2_650_000L, 14.0422, 120.6732),
-        Farm("Cogunan", "Mango Orchards, Sugarcane & Banana", 3_100_000L, 14.0815, 120.6615),
-        Farm("Bilaran", "Sugarcane & Corn", 3_000_000L, 14.0492, 120.6775)
-    )
-
-    private lateinit var farms: MutableList<Farm>
-
-    private fun consolidateFarmsByBarangay(records: List<Farm>): List<Farm> {
-        val grouped = LinkedHashMap<String, MutableList<Farm>>()
-        for (record in records) {
-            val normalizedKey = record.name.trim()
-                .removePrefix("Brgy.")
-                .removePrefix("Barangay")
-                .trim()
-                .lowercase(Locale.US)
-            grouped.getOrPut(normalizedKey) { mutableListOf() }.add(record)
-        }
-
-        return grouped.values.map { entries ->
-            val primary = entries.first()
-            val cleanName = primary.name.trim()
-                .removePrefix("Brgy.")
-                .removePrefix("Barangay")
-                .trim()
-
-            val totalSqm = entries.sumOf { it.squareMeters }
-
-            val uniqueCrops = LinkedHashSet<String>()
-            for (item in entries) {
-                item.crop.split(",", "&", "/")
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .forEach { cropName ->
-                        if (uniqueCrops.none { it.equals(cropName, ignoreCase = true) }) {
-                            uniqueCrops.add(cropName)
-                        }
-                    }
-            }
-
-            val combinedCropText = when (uniqueCrops.size) {
-                0 -> primary.crop
-                1 -> uniqueCrops.first()
-                else -> {
-                    val list = uniqueCrops.toList()
-                    list.dropLast(1).joinToString(", ") + " & " + list.last()
-                }
-            }
-
-            Farm(
-                name = cleanName,
-                crop = combinedCropText,
-                squareMeters = totalSqm,
-                lat = primary.lat,
-                lng = primary.lng,
-                mergedParcels = entries.size
-            )
-        }
-    }
+    private var currentUserRole: String = "Guest"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        farms = consolidateFarmsByBarangay(createDefaultRawFarms()).toMutableList()
+        farms = NasugbuData.getConsolidatedFarms()
 
         title = "Nasugbu Agricultural Map"
-        val logoBitmap = loadAppLogoBitmap()
+        val logoBitmap = MapGraphics.loadAppLogoBitmap(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             setTaskDescription(
                 ActivityManager.TaskDescription(
@@ -283,29 +108,35 @@ class MainActivity : Activity() {
         }
 
         val osmConfig = Configuration.getInstance()
-        osmConfig.userAgentValue = "NasugbuAgriculturalMap/9.6 (Android; Batangas)"
+        osmConfig.userAgentValue = "NasugbuAgriculturalMap/2026.12 (Android; Batangas)"
         osmConfig.osmdroidBasePath = File(cacheDir, "osmdroid")
         osmConfig.osmdroidTileCache = File(osmConfig.osmdroidBasePath, "tiles")
 
         val rootContainer = FrameLayout(this)
 
         mainMapScreen = buildMainMapScreen()
-        val splashScreen = buildStartingLogoScreen(rootContainer)
+        loginScreen = AuthScreens.buildLoginScreen(this) { role, subtitleLabel ->
+            currentUserRole = role
+            subtitleText.text = subtitleLabel
+            loginScreen.visibility = View.GONE
+            mapView.invalidate()
+        }
+        lateinit var splashScreen: LinearLayout
+        splashScreen = AuthScreens.buildSplashScreen(this) {
+            dismissSplashScreen(rootContainer, splashScreen)
+        }
 
         rootContainer.addView(
             mainMapScreen,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         )
-
+        rootContainer.addView(
+            loginScreen,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
         rootContainer.addView(
             splashScreen,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         )
 
         setContentView(rootContainer)
@@ -313,100 +144,6 @@ class MainActivity : Activity() {
         Handler(Looper.getMainLooper()).postDelayed({
             dismissSplashScreen(rootContainer, splashScreen)
         }, 2000L)
-    }
-
-    private fun loadAppLogoBitmap(): Bitmap {
-        val customDrawableId = resources.getIdentifier("app_logo", "drawable", packageName)
-        if (customDrawableId != 0) {
-            val decoded = BitmapFactory.decodeResource(resources, customDrawableId)
-            if (decoded != null) return decoded
-        }
-        return createMapLogoBitmap()
-    }
-
-    private fun buildStartingLogoScreen(rootContainer: FrameLayout): LinearLayout {
-        val splashLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(48, 48, 48, 48)
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(
-                    Color.parseColor("#0D47A1"),
-                    Color.parseColor("#137333")
-                )
-            )
-            isClickable = true
-            isFocusable = true
-        }
-
-        val logoView = ImageView(this).apply {
-            setImageBitmap(loadAppLogoBitmap())
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            val sizePx = (150 * resources.displayMetrics.density).toInt()
-            layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {
-                setMargins(0, 0, 0, 24)
-            }
-            scaleX = 0.82f
-            scaleY = 0.82f
-            alpha = 0f
-            animate()
-                .alpha(1f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .setDuration(600L)
-                .start()
-        }
-
-        val appTitle = TextView(this).apply {
-            text = "NASUGBU AGRICULTURAL MAP"
-            textSize = 23f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            letterSpacing = 0.04f
-        }
-
-        val appSubtitle = TextView(this).apply {
-            text = "Municipal Crop & Barangay Land Area Map\nNasugbu, Batangas"
-            textSize = 14f
-            setTextColor(Color.parseColor("#E8F5E9"))
-            gravity = Gravity.CENTER
-            setPadding(0, 12, 0, 28)
-        }
-
-        val progressBar = ProgressBar(this).apply {
-            isIndeterminate = true
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, 0, 0, 16)
-            }
-        }
-
-        val btnContinue = Button(this).apply {
-            text = "CONTINUE TO MAP"
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#137333"))
-            setPadding(44, 18, 44, 18)
-            background = GradientDrawable().apply {
-                setColor(Color.WHITE)
-                cornerRadius = 50f
-            }
-            setOnClickListener {
-                dismissSplashScreen(rootContainer, splashLayout)
-            }
-        }
-
-        splashLayout.addView(logoView)
-        splashLayout.addView(appTitle)
-        splashLayout.addView(appSubtitle)
-        splashLayout.addView(progressBar)
-        splashLayout.addView(btnContinue)
-
-        return splashLayout
     }
 
     private fun dismissSplashScreen(rootContainer: FrameLayout, splashView: View) {
@@ -425,79 +162,6 @@ class MainActivity : Activity() {
             .start()
     }
 
-    private fun createMapLogoBitmap(): Bitmap {
-        val density = resources.displayMetrics.density
-        val size = (200 * density).toInt()
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-        val cx = size / 2f
-        val cy = size / 2f
-        val outerRadius = (size / 2f) - (4 * density)
-
-        paint.color = Color.WHITE
-        canvas.drawCircle(cx, cy, outerRadius, paint)
-
-        paint.style = Paint.Style.STROKE
-        paint.color = Color.parseColor("#137333")
-        paint.strokeWidth = 3.5f * density
-        canvas.drawCircle(cx, cy, outerRadius - (2 * density), paint)
-
-        paint.style = Paint.Style.FILL
-        val mapRadius = outerRadius - (8 * density)
-        paint.color = Color.parseColor("#E8F0FE")
-        canvas.drawCircle(cx, cy, mapRadius, paint)
-
-        paint.color = Color.parseColor("#81C995")
-        val mountainPath = Path().apply {
-            moveTo(cx - mapRadius * 0.85f, cy + mapRadius * 0.15f)
-            lineTo(cx - mapRadius * 0.35f, cy - mapRadius * 0.32f)
-            lineTo(cx + mapRadius * 0.05f, cy + mapRadius * 0.02f)
-            lineTo(cx + mapRadius * 0.45f, cy - mapRadius * 0.25f)
-            lineTo(cx + mapRadius * 0.85f, cy + mapRadius * 0.15f)
-            close()
-        }
-        canvas.drawPath(mountainPath, paint)
-
-        paint.color = Color.parseColor("#34A853")
-        val fieldRect = RectF(cx - mapRadius * 0.82f, cy - mapRadius * 0.05f, cx + mapRadius * 0.82f, cy + mapRadius * 0.82f)
-        canvas.drawArc(fieldRect, 0f, 180f, true, paint)
-
-        paint.color = Color.parseColor("#A8DAB5")
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 2.4f * density
-        canvas.drawLine(cx - mapRadius * 0.55f, cy + mapRadius * 0.35f, cx + mapRadius * 0.55f, cy + mapRadius * 0.35f, paint)
-        canvas.drawLine(cx - mapRadius * 0.42f, cy + mapRadius * 0.52f, cx + mapRadius * 0.42f, cy + mapRadius * 0.52f, paint)
-
-        paint.style = Paint.Style.FILL
-        val pinCy = cy - (12 * density)
-        val pinRadius = 24 * density
-        paint.color = Color.parseColor("#EA4335")
-        val pinTail = Path().apply {
-            moveTo(cx - pinRadius * 0.78f, pinCy + pinRadius * 0.4f)
-            lineTo(cx + pinRadius * 0.78f, pinCy + pinRadius * 0.4f)
-            lineTo(cx, cy + (28 * density))
-            close()
-        }
-        canvas.drawPath(pinTail, paint)
-        canvas.drawCircle(cx, pinCy, pinRadius, paint)
-
-        paint.color = Color.WHITE
-        canvas.drawCircle(cx, pinCy, pinRadius * 0.42f, paint)
-
-        paint.color = Color.parseColor("#0D652D")
-        val leafPath = Path().apply {
-            moveTo(cx + pinRadius * 0.5f, pinCy - pinRadius * 0.6f)
-            quadTo(cx + pinRadius * 1.4f, pinCy - pinRadius * 1.25f, cx + pinRadius * 1.3f, pinCy - pinRadius * 0.25f)
-            quadTo(cx + pinRadius * 0.75f, pinCy - pinRadius * 0.1f, cx + pinRadius * 0.5f, pinCy - pinRadius * 0.6f)
-            close()
-        }
-        canvas.drawPath(leafPath, paint)
-
-        return bitmap
-    }
-
     private fun buildMainMapScreen(): LinearLayout {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -508,7 +172,7 @@ class MainActivity : Activity() {
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(16, 12, 16, 12)
+            setPadding(14, 10, 14, 10)
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
                 cornerRadius = 20f
@@ -518,21 +182,21 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 0, 0, 10)
+                setMargins(0, 0, 0, 8)
             }
         }
 
         val headerLogo = ImageView(this).apply {
-            setImageBitmap(loadAppLogoBitmap())
+            setImageBitmap(MapGraphics.loadAppLogoBitmap(this@MainActivity))
             scaleType = ImageView.ScaleType.FIT_CENTER
-            val logoSizePx = (44 * resources.displayMetrics.density).toInt()
+            val logoSizePx = (40 * resources.displayMetrics.density).toInt()
             layoutParams = LinearLayout.LayoutParams(logoSizePx, logoSizePx).apply {
-                setMargins(0, 0, 14, 0)
+                setMargins(0, 0, 10, 0)
             }
             setOnClickListener {
                 hideFarmInfoPanel()
                 plotFarmsOnMap(autoZoomSingleMatch = false)
-                mapView.controller.animateTo(nasugbuCenter, 12.4, 500L)
+                mapView.controller.animateTo(NasugbuData.center, 12.6, 500L)
             }
         }
 
@@ -543,23 +207,74 @@ class MainActivity : Activity() {
 
         val title = TextView(this).apply {
             text = "NASUGBU AGRICULTURAL MAP"
-            textSize = 15.5f
+            textSize = 13.5f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#202124"))
         }
 
-        val subtitle = TextView(this).apply {
-            text = "Pindutin ang barangay pin para makita ang detalye"
-            textSize = 11f
+        subtitleText = TextView(this).apply {
+            text = "Pindutin kahit saan sa mapa para sa GPS coordinates"
+            textSize = 10f
             setTextColor(Color.parseColor("#137333"))
             setTypeface(null, Typeface.BOLD)
         }
 
         titleColumn.addView(title)
-        titleColumn.addView(subtitle)
+        titleColumn.addView(subtitleText)
+
+        btnToggleTopBar = Button(this).apply {
+            text = "HIDE BAR ▲"
+            textSize = 9f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#1A73E8"))
+            setPadding(14, 6, 14, 6)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E8F0FE"))
+                cornerRadius = 14f
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(6, 0, 0, 0)
+            }
+            setOnClickListener { toggleTopControlsBar() }
+        }
+
+        val btnLogout = Button(this).apply {
+            text = "SIGN IN"
+            textSize = 9f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            setPadding(14, 6, 14, 6)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#D93025"))
+                cornerRadius = 14f
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(6, 0, 0, 0)
+            }
+            setOnClickListener {
+                hideFarmInfoPanel()
+                loginScreen.visibility = View.VISIBLE
+            }
+        }
 
         headerRow.addView(headerLogo)
         headerRow.addView(titleColumn)
+        headerRow.addView(btnToggleTopBar)
+        headerRow.addView(btnLogout)
+
+        topControlsContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
 
         val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -678,7 +393,7 @@ class MainActivity : Activity() {
             }
             setOnClickListener {
                 hideFarmInfoPanel()
-                mapView.controller.animateTo(nasugbuCenter, 12.4, 500L)
+                mapView.controller.animateTo(NasugbuData.center, 12.6, 500L)
             }
         }
 
@@ -706,7 +421,7 @@ class MainActivity : Activity() {
         }
 
         val btnLayer = Button(this).apply {
-            text = "SATELLITE"
+            text = "SATELLITE 3D"
             textSize = 10f
             setTypeface(null, Typeface.BOLD)
             setBackgroundColor(Color.parseColor("#137333"))
@@ -721,16 +436,23 @@ class MainActivity : Activity() {
                 when (mapModeIndex) {
                     0 -> {
                         mapView.setTileSource(TileSourceFactory.MAPNIK)
-                        text = "SATELLITE"
+                        mapView.setMapOrientation(0f)
+                        text = "SATELLITE 3D"
                         setBackgroundColor(Color.parseColor("#137333"))
                     }
                     1 -> {
-                        mapView.setTileSource(satelliteTileSource)
-                        text = "TERRAIN"
+                        mapView.setTileSource(MapTileSources.satelliteHybrid2026)
+                        mapView.controller.setZoom(14.5)
+                        text = "TERRAIN 2026"
                         setBackgroundColor(Color.parseColor("#0B57D0"))
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Hybrid Satellite View Active (2026 Imagery)",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                     else -> {
-                        mapView.setTileSource(TileSourceFactory.OpenTopo)
+                        mapView.setTileSource(MapTileSources.terrain2026)
                         text = "ROAD MAP"
                         setBackgroundColor(Color.parseColor("#E37400"))
                     }
@@ -744,7 +466,10 @@ class MainActivity : Activity() {
         buttonRow.addView(btnLayer)
         buttonScroll.addView(buttonRow)
 
-        // Map Container & OSMDroid MapView
+        topControlsContainer.addView(searchRow)
+        topControlsContainer.addView(filterScroll)
+        topControlsContainer.addView(buttonScroll)
+
         mapContainer = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -756,32 +481,29 @@ class MainActivity : Activity() {
         mapView = MapView(this).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
-            setScrollableAreaLimitDouble(nasugbuBounds)
-            minZoomLevel = 11.5
-            maxZoomLevel = 18.0
-            controller.setZoom(12.4)
-            controller.setCenter(nasugbuCenter)
+            setScrollableAreaLimitDouble(NasugbuData.bounds)
+            minZoomLevel = 12.2
+            maxZoomLevel = 19.0
+            controller.setZoom(12.6)
+            controller.setCenter(NasugbuData.center)
         }
 
-        val rotationOverlay = RotationGestureOverlay(mapView).apply {
-            isEnabled = true
-        }
+        val rotationOverlay = RotationGestureOverlay(mapView).apply { isEnabled = true }
         mapView.overlays.add(rotationOverlay)
 
-        // Kapag nag-tap sa bakanteng lugar sa mapa, isasara ang anumang InfoWindow
-        // at itatago ang bottom details card (walang lalabas na white chat box).
-        val emptyMapTapOverlay = MapEventsOverlay(object : MapEventsReceiver {
+        val mapTapCoordinatesOverlay = MapEventsOverlay(object : MapEventsReceiver {
             override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
                 InfoWindow.closeAllInfoWindowsOn(mapView)
-                hideFarmInfoPanel()
-                return false
+                if (p != null) showCustomLocationPanel(p)
+                return true
             }
 
             override fun longPressHelper(p: GeoPoint?): Boolean {
-                return false
+                if (p != null) showCustomLocationPanel(p)
+                return true
             }
         })
-        mapView.overlays.add(emptyMapTapOverlay)
+        mapView.overlays.add(mapTapCoordinatesOverlay)
 
         mapView.addMapListener(object : MapListener {
             override fun onScroll(event: ScrollEvent?): Boolean {
@@ -797,13 +519,9 @@ class MainActivity : Activity() {
 
         mapContainer.addView(
             mapView,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         )
 
-        // Bottom Barangay Details Card
         infoPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -840,7 +558,7 @@ class MainActivity : Activity() {
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#5F6368"))
             setBackgroundColor(Color.parseColor("#F1F3F4"))
-            setPadding(18, 6, 18, 6)
+            setPadding(16, 4, 16, 4)
             setOnClickListener { hideFarmInfoPanel() }
         }
 
@@ -863,70 +581,63 @@ class MainActivity : Activity() {
         }
         resultScroll.addView(result)
 
-        val actionScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-        }
-
-        val actionRow = LinearLayout(this).apply {
+        val actionButtonsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
 
         btnGoogleMapsArea = Button(this).apply {
             text = "MAPS"
-            textSize = 10f
+            textSize = 10.5f
             setTypeface(null, Typeface.BOLD)
             setBackgroundColor(Color.parseColor("#1A73E8"))
             setTextColor(Color.WHITE)
-            setPadding(22, 10, 22, 10)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 8, 0) }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 6, 0)
+            }
             setOnClickListener {
-                selectedFarm?.let { openInGoogleMaps(it, satelliteMode = false) }
+                getActiveTargetCoordinates()?.let { (lat, lng) ->
+                    openCoordinatesInGoogleMaps(lat, lng, satellite3DMode = false)
+                }
             }
         }
 
         btnDirections = Button(this).apply {
             text = "DIRECTIONS"
-            textSize = 10f
+            textSize = 10.5f
             setTypeface(null, Typeface.BOLD)
             setBackgroundColor(Color.parseColor("#137333"))
             setTextColor(Color.WHITE)
-            setPadding(22, 10, 22, 10)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 8, 0) }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 6, 0)
+            }
             setOnClickListener {
-                selectedFarm?.let { openDirectionsInGoogleMaps(it) }
+                getActiveTargetCoordinates()?.let { (lat, lng) ->
+                    openCoordinatesDirections(lat, lng)
+                }
             }
         }
 
         btnStreetView = Button(this).apply {
-            text = "SATELLITE"
-            textSize = 10f
+            text = "3D SATELLITE"
+            textSize = 10.5f
             setTypeface(null, Typeface.BOLD)
             setBackgroundColor(Color.parseColor("#E37400"))
             setTextColor(Color.WHITE)
-            setPadding(22, 10, 22, 10)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                selectedFarm?.let { openInGoogleMaps(it, satelliteMode = true) }
+                getActiveTargetCoordinates()?.let { (lat, lng) ->
+                    openCoordinatesInGoogleMaps(lat, lng, satellite3DMode = true)
+                }
             }
         }
 
-        actionRow.addView(btnGoogleMapsArea)
-        actionRow.addView(btnDirections)
-        actionRow.addView(btnStreetView)
-        actionScroll.addView(actionRow)
+        actionButtonsRow.addView(btnGoogleMapsArea)
+        actionButtonsRow.addView(btnDirections)
+        actionButtonsRow.addView(btnStreetView)
 
         infoPanel.addView(infoHeaderRow)
         infoPanel.addView(resultScroll)
-        infoPanel.addView(actionScroll)
+        infoPanel.addView(actionButtonsRow)
 
         searchInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -938,9 +649,7 @@ class MainActivity : Activity() {
         })
 
         layout.addView(headerRow)
-        layout.addView(searchRow)
-        layout.addView(filterScroll)
-        layout.addView(buttonScroll)
+        layout.addView(topControlsContainer)
         layout.addView(mapContainer)
         layout.addView(infoPanel)
 
@@ -948,291 +657,196 @@ class MainActivity : Activity() {
         return layout
     }
 
+    private fun getActiveTargetCoordinates(): Pair<Double, Double>? {
+        selectedFarm?.let { return Pair(it.lat, it.lng) }
+        tappedCustomPoint?.let { return Pair(it.latitude, it.longitude) }
+        return null
+    }
+
+    private fun toggleTopControlsBar() {
+        isTopBarHidden = !isTopBarHidden
+        if (isTopBarHidden) {
+            topControlsContainer.visibility = View.GONE
+            btnToggleTopBar.text = "SHOW BAR ▼"
+            btnToggleTopBar.setTextColor(Color.WHITE)
+            btnToggleTopBar.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A73E8"))
+                cornerRadius = 14f
+            }
+        } else {
+            topControlsContainer.visibility = View.VISIBLE
+            btnToggleTopBar.text = "HIDE BAR ▲"
+            btnToggleTopBar.setTextColor(Color.parseColor("#1A73E8"))
+            btnToggleTopBar.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E8F0FE"))
+                cornerRadius = 14f
+            }
+        }
+        mapView.invalidate()
+    }
+
     private fun updateFilterChipStyles() {
         for ((key, btn) in filterButtons) {
             val isSelected = key == activeCropFilter
-            btn.setBackgroundColor(
-                if (isSelected) Color.parseColor("#137333") else Color.parseColor("#E8EAED")
-            )
-            btn.setTextColor(
-                if (isSelected) Color.WHITE else Color.parseColor("#3C4043")
-            )
+            btn.setBackgroundColor(if (isSelected) Color.parseColor("#137333") else Color.parseColor("#E8EAED"))
+            btn.setTextColor(if (isSelected) Color.WHITE else Color.parseColor("#3C4043"))
         }
     }
 
     private fun enforceNasugbuOnlyCamera() {
         val center = mapView.mapCenter
-        val clampedLat = center.latitude.coerceIn(nasugbuBounds.latSouth, nasugbuBounds.latNorth)
-        val clampedLng = center.longitude.coerceIn(nasugbuBounds.lonWest, nasugbuBounds.lonEast)
-        if (clampedLat != center.latitude || clampedLng != center.longitude) {
+        val clampedLat = center.latitude.coerceIn(NasugbuData.bounds.latSouth, NasugbuData.bounds.latNorth)
+        val clampedLng = center.longitude.coerceIn(NasugbuData.bounds.lonWest, NasugbuData.bounds.lonEast)
+        if (kotlin.math.abs(center.latitude - clampedLat) > 0.0002 ||
+            kotlin.math.abs(center.longitude - clampedLng) > 0.0002
+        ) {
             mapView.controller.setCenter(GeoPoint(clampedLat, clampedLng))
-        }
-    }
-
-    private fun matchesFilter(farm: Farm): Boolean {
-        val cropLower = farm.crop.lowercase(Locale.US)
-        val categoryMatches = when (activeCropFilter) {
-            "ALL" -> true
-            "SUGARCANE" -> cropLower.contains("sugarcane")
-            "RICE" -> cropLower.contains("rice")
-            "COCONUT" -> cropLower.contains("coconut")
-            "FRUIT" -> cropLower.contains("pineapple") || cropLower.contains("mango") || cropLower.contains("banana")
-            "VEG" -> cropLower.contains("corn") || cropLower.contains("vegetable") || cropLower.contains("sayote") || cropLower.contains("root")
-            else -> true
-        }
-        if (!categoryMatches) return false
-
-        if (activeSearchQuery.isEmpty()) return true
-        val q = activeSearchQuery.lowercase(Locale.US)
-        return farm.name.lowercase(Locale.US).contains(q) || farm.crop.lowercase(Locale.US).contains(q)
-    }
-
-    private fun getCropAccentColor(cropText: String): Int {
-        val lower = cropText.lowercase(Locale.US)
-        return when {
-            lower.contains("sugarcane") -> Color.parseColor("#137333")
-            lower.contains("rice") -> Color.parseColor("#E37400")
-            lower.contains("coconut") -> Color.parseColor("#0B57D0")
-            lower.contains("pineapple") || lower.contains("mango") -> Color.parseColor("#C5221F")
-            else -> Color.parseColor("#7627BB")
         }
     }
 
     private fun plotFarmsOnMap(autoZoomSingleMatch: Boolean, highlightedFarmName: String? = null) {
         InfoWindow.closeAllInfoWindowsOn(mapView)
+        mapView.overlays.removeAll { it is Marker || it is Polygon }
 
-        val overlaysToRemove = mapView.overlays.filter { it is Marker || it is Polygon }
-        mapView.overlays.removeAll(overlaysToRemove)
-
-        // Municipal Boundary Outline (infoWindow = null at walang click bubble)
-        val boundaryPolygon = Polygon(mapView).apply {
-            points = nasugbuPolygonPoints
-            fillPaint.color = Color.argb(18, 19, 115, 51)
+        val nasugbuBoundaryOutline = Polygon(mapView).apply {
+            points = NasugbuData.polygonPoints
+            fillPaint.color = Color.argb(14, 19, 115, 51)
             outlinePaint.color = Color.parseColor("#137333")
-            outlinePaint.strokeWidth = 3.5f
+            outlinePaint.strokeWidth = 5.0f
             infoWindow = null
-            setOnClickListener { _, _, _ ->
-                hideFarmInfoPanel()
-                false
-            }
+            setOnClickListener { _, _, _ -> false }
         }
-        mapView.overlays.add(boundaryPolygon)
+        mapView.overlays.add(nasugbuBoundaryOutline)
 
-        val visibleFarms = farms.filter { matchesFilter(it) }
+        val queryLower = activeSearchQuery.lowercase(Locale.US)
+        val visibleFarms = farms.filter { farm ->
+            val matchesText = queryLower.isEmpty() ||
+                    farm.name.lowercase(Locale.US).contains(queryLower) ||
+                    farm.crop.lowercase(Locale.US).contains(queryLower)
+            matchesText && NasugbuData.matchesCropCategory(farm, activeCropFilter)
+        }
 
         if (visibleFarms.isEmpty()) {
-            hideFarmInfoPanel()
+            if (tappedCustomPoint == null) hideFarmInfoPanel()
+            drawCustomTappedPinIfPresent()
             mapView.invalidate()
             return
         }
 
         for (farm in visibleFarms) {
             val point = GeoPoint(farm.lat, farm.lng)
-            val accentColor = getCropAccentColor(farm.crop)
-            val isHighlighted = highlightedFarmName != null && farm.name.equals(highlightedFarmName, ignoreCase = true)
+            val accentColor = MapGraphics.getCropAccentColor(farm.crop)
+            val isSelected = highlightedFarmName != null && farm.name.equals(highlightedFarmName, ignoreCase = true)
 
-            // Proportional Area Circle (infoWindow = null para hindi lumabas ang white chat bubble!)
-            val radiusMeters = (sqrt(farm.squareMeters / Math.PI)).coerceIn(480.0, 1180.0)
-            val areaCircle = Polygon(mapView).apply {
-                points = Polygon.pointsAsCircle(point, radiusMeters)
-                fillPaint.color = Color.argb(
-                    if (isHighlighted) 75 else 42,
-                    Color.red(accentColor),
-                    Color.green(accentColor),
-                    Color.blue(accentColor)
-                )
-                outlinePaint.color = accentColor
-                outlinePaint.strokeWidth = if (isHighlighted) 4.0f else 2.0f
-                infoWindow = null
-                setOnClickListener { _, _, _ ->
-                    showFarmInfoPanel(farm)
-                    mapView.controller.animateTo(point, max(mapView.zoomLevelDouble, 14.2), 400L)
-                    plotFarmsOnMap(autoZoomSingleMatch = false, highlightedFarmName = farm.name)
-                    true
-                }
-            }
-            mapView.overlays.add(areaCircle)
-
-            // Barangay Pin Marker (Fixed — walang drag, walang infoWindow bubble)
             val marker = Marker(mapView).apply {
                 position = point
                 isDraggable = false
                 infoWindow = null
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                icon = createBarangayPinDrawable(farm, accentColor, isHighlighted)
+                icon = if (showMapLabels || isSelected) {
+                    MapGraphics.createFloatingInfoCardDrawable(this@MainActivity, farm, accentColor, isSelected)
+                } else {
+                    MapGraphics.createBarangayPinDrawable(this@MainActivity, accentColor)
+                }
+                setAnchor(
+                    Marker.ANCHOR_CENTER,
+                    if (showMapLabels || isSelected) Marker.ANCHOR_CENTER else Marker.ANCHOR_BOTTOM
+                )
                 setOnMarkerClickListener { _, _ ->
                     showFarmInfoPanel(farm)
-                    mapView.controller.animateTo(point, max(mapView.zoomLevelDouble, 14.2), 400L)
-                    plotFarmsOnMap(autoZoomSingleMatch = false, highlightedFarmName = farm.name)
                     true
                 }
             }
             mapView.overlays.add(marker)
         }
 
+        drawCustomTappedPinIfPresent()
+
         if (autoZoomSingleMatch && visibleFarms.size == 1) {
-            val single = visibleFarms.first()
-            showFarmInfoPanel(single)
-            mapView.controller.animateTo(GeoPoint(single.lat, single.lng), 15.6, 500L)
+            val match = visibleFarms.first()
+            mapView.controller.animateTo(GeoPoint(match.lat, match.lng), 15.6, 550L)
+            showFarmInfoPanel(match)
         }
 
         mapView.invalidate()
     }
 
-    private fun createBarangayPinDrawable(farm: Farm, accentColor: Int, isHighlighted: Boolean): BitmapDrawable {
-        val density = resources.displayMetrics.density
-        val titleText = "Brgy. ${farm.name}"
-        val subText = "${farm.shortAreaLabel()} • ${farm.crop}"
+    private fun drawCustomTappedPinIfPresent() {
+        val customPoint = tappedCustomPoint ?: return
+        val blueAccent = Color.parseColor("#1A73E8")
 
-        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = 11f * density
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        val customMarker = Marker(mapView).apply {
+            position = customPoint
+            isDraggable = false
+            infoWindow = null
+            icon = MapGraphics.createCustomCoordinateBadgeDrawable(this@MainActivity, customPoint, blueAccent)
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            setOnMarkerClickListener { _, _ -> true }
         }
-        val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#E8F5E9")
-            textSize = 9.5f * density
-        }
-
-        val pinRadius = (if (isHighlighted) 15f else 12f) * density
-        val pinHeight = pinRadius * 2.5f
-
-        if (!showMapLabels && !isHighlighted) {
-            val w = (pinRadius * 2.6f).toInt().coerceAtLeast(1)
-            val h = (pinHeight + 6 * density).toInt().coerceAtLeast(1)
-            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bmp)
-            drawPinIcon(canvas, w / 2f, pinRadius + 2 * density, pinRadius, accentColor, false)
-            return BitmapDrawable(resources, bmp)
-        }
-
-        val titleBounds = Rect()
-        titlePaint.getTextBounds(titleText, 0, titleText.length, titleBounds)
-        val subBounds = Rect()
-        subPaint.getTextBounds(subText, 0, subText.length, subBounds)
-
-        val padH = 10f * density
-        val padV = 6f * density
-        val cardWidth = max(titleBounds.width(), subBounds.width()) + padH * 2
-        val cardHeight = titleBounds.height() + subBounds.height() + padV * 2.6f
-
-        val totalWidth = max(cardWidth, pinRadius * 2.6f).toInt().coerceAtLeast(1)
-        val totalHeight = (cardHeight + pinHeight + 8 * density).toInt().coerceAtLeast(1)
-
-        val bmp = Bitmap.createBitmap(totalWidth, totalHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bmp)
-
-        val cardLeft = (totalWidth - cardWidth) / 2f
-        val cardTop = 2f * density
-        val cardRect = RectF(cardLeft, cardTop, cardLeft + cardWidth, cardTop + cardHeight)
-
-        val cardBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (isHighlighted) Color.parseColor("#202124") else accentColor
-        }
-        val cardBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            color = Color.WHITE
-            strokeWidth = 1.8f * density
-        }
-
-        canvas.drawRoundRect(cardRect, 10f * density, 10f * density, cardBgPaint)
-        canvas.drawRoundRect(cardRect, 10f * density, 10f * density, cardBorderPaint)
-
-        canvas.drawText(
-            titleText,
-            cardLeft + padH,
-            cardTop + padV + titleBounds.height(),
-            titlePaint
-        )
-        canvas.drawText(
-            subText,
-            cardLeft + padH,
-            cardTop + padV * 1.7f + titleBounds.height() + subBounds.height(),
-            subPaint
-        )
-
-        val pinCenterY = cardTop + cardHeight + 4f * density + pinRadius
-        drawPinIcon(canvas, totalWidth / 2f, pinCenterY, pinRadius, accentColor, isHighlighted)
-
-        return BitmapDrawable(resources, bmp)
-    }
-
-    private fun drawPinIcon(
-        canvas: Canvas,
-        cx: Float,
-        cy: Float,
-        radius: Float,
-        color: Int,
-        highlighted: Boolean
-    ) {
-        val density = resources.displayMetrics.density
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.color = if (highlighted) Color.parseColor("#D93025") else color
-            style = Paint.Style.FILL
-        }
-        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.color = Color.WHITE
-            style = Paint.Style.STROKE
-            strokeWidth = 2.2f * density
-        }
-
-        val tail = Path().apply {
-            moveTo(cx - radius * 0.78f, cy + radius * 0.35f)
-            lineTo(cx + radius * 0.78f, cy + radius * 0.35f)
-            lineTo(cx, cy + radius * 1.65f)
-            close()
-        }
-        canvas.drawPath(tail, paint)
-        canvas.drawCircle(cx, cy, radius, paint)
-        canvas.drawCircle(cx, cy, radius, strokePaint)
-
-        paint.color = Color.WHITE
-        canvas.drawCircle(cx, cy, radius * 0.38f, paint)
+        mapView.overlays.add(customMarker)
     }
 
     private fun showFarmInfoPanel(farm: Farm) {
+        InfoWindow.closeAllInfoWindowsOn(mapView)
+        tappedCustomPoint = null
         selectedFarm = farm
-        infoLabel.text = "BRGY. ${farm.name.uppercase(Locale.US)} — AGRICULTURAL DETAILS"
+        infoLabel.setTextColor(Color.parseColor("#137333"))
+        infoLabel.text = "BRGY. ${farm.name.uppercase(Locale.US)} — DETAILS & GPS"
         result.text = farm.displayInfo()
         infoPanel.visibility = View.VISIBLE
+        plotFarmsOnMap(autoZoomSingleMatch = false, highlightedFarmName = farm.name)
+    }
+
+    private fun showCustomLocationPanel(point: GeoPoint) {
+        InfoWindow.closeAllInfoWindowsOn(mapView)
+        selectedFarm = null
+        tappedCustomPoint = point
+
+        val townProper = GeoPoint(14.0728, 120.6336)
+        val distKm = townProper.distanceToAsDouble(point) / 1000.0
+        val latStr = String.format(Locale.US, "%.6f", point.latitude)
+        val lngStr = String.format(Locale.US, "%.6f", point.longitude)
+
+        infoLabel.setTextColor(Color.parseColor("#1A73E8"))
+        infoLabel.text = "PINNED SPOT — EXACT GPS COORDINATES"
+        result.text = "Location: Nasugbu, Batangas\n" +
+                "Latitude: $latStr° N\n" +
+                "Longitude: $lngStr° E\n" +
+                "Decimal GPS: $latStr, $lngStr\n" +
+                "Distance: ${String.format(Locale.US, "%.2f", distKm)} km from Town Proper"
+        infoPanel.visibility = View.VISIBLE
+
+        plotFarmsOnMap(autoZoomSingleMatch = false, highlightedFarmName = null)
     }
 
     private fun hideFarmInfoPanel() {
+        InfoWindow.closeAllInfoWindowsOn(mapView)
         selectedFarm = null
+        tappedCustomPoint = null
         infoPanel.visibility = View.GONE
+        plotFarmsOnMap(autoZoomSingleMatch = false, highlightedFarmName = null)
     }
 
-    private fun openInGoogleMaps(farm: Farm, satelliteMode: Boolean) {
-        val uriString = if (satelliteMode) {
-            "https://www.google.com/maps/@?api=1&map_action=map&center=${farm.lat},${farm.lng}&zoom=16&basemap=satellite"
-        } else {
-            "geo:${farm.lat},${farm.lng}?q=${farm.lat},${farm.lng}(Brgy.+${Uri.encode(farm.name)}+Nasugbu)"
-        }
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uriString))
+    private fun openCoordinatesInGoogleMaps(lat: Double, lng: Double, satellite3DMode: Boolean) {
         try {
-            startActivity(intent)
+            val basemap = if (satellite3DMode) "satellite" else "roadmap"
+            val zoomLevel = if (satellite3DMode) 18 else 16
+            val universalUrl = "https://www.google.com/maps/@?api=1&map_action=map&center=$lat,$lng&zoom=$zoomLevel&basemap=$basemap"
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(universalUrl)))
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Walang naka-install na Google Maps o Browser sa device.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            val webFallback = Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse("https://www.google.com/maps/search/?api=1&query=${farm.lat},${farm.lng}")
-            )
-            startActivity(webFallback)
+            Toast.makeText(this, "Hindi mabuksan ang mapa: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun openDirectionsInGoogleMaps(farm: Farm) {
-        val navUri = Uri.parse("google.navigation:q=${farm.lat},${farm.lng}")
-        val intent = Intent(Intent.ACTION_VIEW, navUri).apply {
-            setPackage("com.google.android.apps.maps")
-        }
+    private fun openCoordinatesDirections(lat: Double, lng: Double) {
         try {
-            startActivity(intent)
+            val directionsUrl = "https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving"
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(directionsUrl)))
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Walang naka-install na Google Maps o Browser para sa directions.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            val webFallback = Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${farm.lat},${farm.lng}")
-            )
-            startActivity(webFallback)
+            Toast.makeText(this, "Hindi mabuksan ang directions: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
     }
 
