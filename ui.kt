@@ -183,7 +183,6 @@ object AuthScreens {
             setPadding(0, 4, 0, 16)
         }
 
-        // Mode Switcher Tabs: SIGN IN | CREATE ACCOUNT
         val tabRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(6, 6, 6, 6)
@@ -256,7 +255,6 @@ object AuthScreens {
             visibility = View.GONE
         }
 
-        // Role Selection (Visible only in Create Account mode)
         val roleContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -379,7 +377,7 @@ object AuthScreens {
                 errorLabel.visibility = View.GONE
                 onLoginSuccess(
                     "Public Visitor (Guest)",
-                    "Pindutin kahit saan sa mapa para sa GPS coordinates"
+                    "Tap anywhere on the map to get GPS coordinates"
                 )
             }
         }
@@ -459,19 +457,19 @@ object AuthScreens {
 
                 when {
                     fullName.isEmpty() || userRaw.isEmpty() || pass.isEmpty() || confirmPass.isEmpty() -> {
-                        errorLabel.text = "Pakipunan ang lahat ng detalye para makagawa ng account."
+                        errorLabel.text = "Please fill in all fields to create an account."
                         errorLabel.visibility = View.VISIBLE
                     }
                     userKey == "admin" || userKey == "farmer" || prefs.contains("pwd_$userKey") -> {
-                        errorLabel.text = "Ginagamit na ang username na '$userRaw'. Pumili ng iba."
+                        errorLabel.text = "Username '$userRaw' is already taken. Please choose another."
                         errorLabel.visibility = View.VISIBLE
                     }
                     pass.length < 4 -> {
-                        errorLabel.text = "Ang password ay dapat hindi bababa sa 4 na characters."
+                        errorLabel.text = "Password must be at least 4 characters long."
                         errorLabel.visibility = View.VISIBLE
                     }
                     pass != confirmPass -> {
-                        errorLabel.text = "Hindi magkatugma ang Password at Confirm Password."
+                        errorLabel.text = "Password and Confirm Password do not match."
                         errorLabel.visibility = View.VISIBLE
                     }
                     else -> {
@@ -497,7 +495,7 @@ object AuthScreens {
             } else {
                 when {
                     userRaw.isEmpty() || pass.isEmpty() -> {
-                        errorLabel.text = "Pakilagay ang iyong username at password."
+                        errorLabel.text = "Please enter your username and password."
                         errorLabel.visibility = View.VISIBLE
                     }
                     userKey == "admin" && pass == "admin123" -> {
@@ -528,12 +526,12 @@ object AuthScreens {
                             Toast.makeText(context, "Welcome back, $displayRole!", Toast.LENGTH_SHORT).show()
                             onLoginSuccess(displayRole, "Active: $displayRole • Tap anywhere for GPS")
                         } else {
-                            errorLabel.text = "Maling password para sa account na '$userRaw'."
+                            errorLabel.text = "Incorrect password for account '$userRaw'."
                             errorLabel.visibility = View.VISIBLE
                         }
                     }
                     else -> {
-                        errorLabel.text = "Walang nahanap na account. Pindutin ang 'Create Account' kung bago ka."
+                        errorLabel.text = "Account not found. Click 'Create Account' if you are new."
                         errorLabel.visibility = View.VISIBLE
                     }
                 }
