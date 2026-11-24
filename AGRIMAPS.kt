@@ -32,6 +32,7 @@ import com.example.myapplication.map.MapGraphics
 import com.example.myapplication.map.MapTileSources
 import com.example.myapplication.model.Farm
 import com.example.myapplication.ui.AuthScreens
+import com.example.myapplication.ui.UserSession
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.events.MapListener
@@ -54,6 +55,7 @@ class MainActivity : Activity() {
     private lateinit var mapContainer: FrameLayout
     private lateinit var topControlsContainer: LinearLayout
     private lateinit var btnToggleTopBar: Button
+    private lateinit var btnProfile: Button
     private lateinit var searchInput: EditText
     private lateinit var btnToggleLabels: Button
     private lateinit var btnStreetView: Button
@@ -62,16 +64,27 @@ class MainActivity : Activity() {
     private lateinit var btnCloseInfo: Button
     private lateinit var infoPanel: LinearLayout
     private lateinit var infoLabel: TextView
+    private lateinit var cropTapHintLabel: TextView
+    private lateinit var cropGalleryScroll: HorizontalScrollView
+    private lateinit var cropGalleryRow: LinearLayout
     private lateinit var result: TextView
     private lateinit var resultScroll: ScrollView
     private lateinit var subtitleText: TextView
 
     private lateinit var mainMapScreen: LinearLayout
     private lateinit var loginScreen: LinearLayout
+    private lateinit var profileOverlay: LinearLayout
+    private lateinit var cropPreviewOverlay: LinearLayout
+    private lateinit var previewCropImage: ImageView
+    private lateinit var previewCropTitle: TextView
+    private lateinit var previewCropDesc: TextView
+    private lateinit var btnSearchCropGoogle: Button
+    private lateinit var bindProfileSession: (UserSession) -> Unit
 
     private lateinit var farms: MutableList<Farm>
     private var selectedFarm: Farm? = null
     private var tappedCustomPoint: GeoPoint? = null
+    private var selectedCropForSearch: String = ""
     private var activeCropFilter: String = "ALL"
     private var activeSearchQuery: String = ""
     private var showMapLabels: Boolean = false
@@ -79,7 +92,12 @@ class MainActivity : Activity() {
     private var mapModeIndex: Int = 0
     private val filterButtons = mutableMapOf<String, Button>()
     private var splashDismissed = false
-    private var currentUserRole: String = "Guest"
+    private var currentUserSession: UserSession = UserSession(
+        fullName = "Public Visitor",
+        username = "guest",
+        role = "Guest",
+        isGuest = true
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,7 +111,7 @@ class MainActivity : Activity() {
                 ActivityManager.TaskDescription(
                     "Nasugbu Agricultural Map",
                     R.mipmap.ic_launcher,
-                    Color.parseColor("#137333")
+                    Color.parseColor("#0B4F32")
                 )
             )
         } else {
@@ -102,7 +120,7 @@ class MainActivity : Activity() {
                 ActivityManager.TaskDescription(
                     "Nasugbu Agricultural Map",
                     logoBitmap,
-                    Color.parseColor("#137333")
+                    Color.parseColor("#0B4F32")
                 )
             )
         }
@@ -115,12 +133,31 @@ class MainActivity : Activity() {
         val rootContainer = FrameLayout(this)
 
         mainMapScreen = buildMainMapScreen()
-        loginScreen = AuthScreens.buildLoginScreen(this) { role, subtitleLabel ->
-            currentUserRole = role
+        cropPreviewOverlay = buildCropPreviewOverlay()
+
+        val profilePair = AuthScreens.buildProfileOverlay(
+            context = this,
+            onCloseProfile = {
+                profileOverlay.visibility = View.GONE
+            },
+            onSignOut = {
+                profileOverlay.visibility = View.GONE
+                hideFarmInfoPanel()
+                loginScreen.visibility = View.VISIBLE
+            }
+        )
+        profileOverlay = profilePair.first
+        bindProfileSession = profilePair.second
+
+        loginScreen = AuthScreens.buildLoginScreen(this) { session, subtitleLabel ->
+            currentUserSession = session
             subtitleText.text = subtitleLabel
+            btnProfile.text = "PROFILE (${session.avatarInitials()})"
+            bindProfileSession(session)
             loginScreen.visibility = View.GONE
             mapView.invalidate()
         }
+
         lateinit var splashScreen: LinearLayout
         splashScreen = AuthScreens.buildSplashScreen(this) {
             dismissSplashScreen(rootContainer, splashScreen)
@@ -128,6 +165,14 @@ class MainActivity : Activity() {
 
         rootContainer.addView(
             mainMapScreen,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
+        rootContainer.addView(
+            cropPreviewOverlay,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
+        rootContainer.addView(
+            profileOverlay,
             FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         )
         rootContainer.addView(
@@ -162,60 +207,309 @@ class MainActivity : Activity() {
             .start()
     }
 
-    private fun buildMainMapScreen(): LinearLayout {
-        val layout = LinearLayout(this).apply {
+    private fun openUserProfileModal() {
+        bindProfileSession(currentUserSession)
+        profileOverlay.visibility = View.VISIBLE
+    }
+
+    private fun buildCropPreviewOverlay(): LinearLayout {
+        val density = resources.displayMetrics.density
+
+        val backdrop = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(20, 20, 20, 20)
-            setBackgroundColor(Color.parseColor("#F8F9FA"))
+            gravity = Gravity.CENTER
+            setPadding(34, 34, 34, 34)
+            setBackgroundColor(Color.argb(185, 10, 37, 64))
+            visibility = View.GONE
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { visibility = View.GONE }
         }
 
-        val headerRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(14, 10, 14, 10)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            elevation = 14f * density
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
-                cornerRadius = 20f
-                setStroke(2, Color.parseColor("#E8EAED"))
+                cornerRadius = 18f * density
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            isClickable = true
+            isFocusable = true
+        }
+
+        val topStrip = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(
+                    Color.parseColor("#137333"),
+                    Color.parseColor("#1A73E8")
+                )
+            ).apply {
+                cornerRadii = floatArrayOf(
+                    18f * density, 18f * density,
+                    18f * density, 18f * density,
+                    0f, 0f,
+                    0f, 0f
+                )
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (6 * density).toInt()
+            )
+        }
+
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(28, 24, 28, 24)
+        }
+
+        val badge = TextView(this).apply {
+            text = "CROP VISUAL REFERENCE & GOOGLE SEARCH"
+            textSize = 9.5f
+            letterSpacing = 0.05f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#137333"))
+            setPadding(16, 6, 16, 6)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E6F4EA"))
+                cornerRadius = 50f * density
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 14)
+            }
+        }
+
+        previewCropImage = ImageView(this).apply {
+            val imgWidth = (156 * density).toInt()
+            val imgHeight = (126 * density).toInt()
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            layoutParams = LinearLayout.LayoutParams(imgWidth, imgHeight).apply {
+                setMargins(0, 0, 0, 14)
+            }
+        }
+
+        previewCropTitle = TextView(this).apply {
+            text = "Crop Name"
+            textSize = 19f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#0F172A"))
+            gravity = Gravity.CENTER
+        }
+
+        previewCropDesc = TextView(this).apply {
+            text = ""
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#475569"))
+            gravity = Gravity.CENTER
+            setLineSpacing(4f, 1.15f)
+            setPadding(16, 12, 16, 12)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F8FAFC"))
+                cornerRadius = 12f * density
+                setStroke((1 * density).toInt(), Color.parseColor("#E2E8F0"))
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 0, 0, 8)
+                setMargins(0, 10, 0, 16)
             }
+        }
+
+        btnSearchCropGoogle = Button(this).apply {
+            text = "SEARCH ACTUAL PHOTOS ON GOOGLE"
+            textSize = 11.5f
+            letterSpacing = 0.03f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            setPadding(20, 18, 20, 18)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A73E8"))
+                cornerRadius = 12f * density
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 10)
+            }
+            setOnClickListener {
+                if (selectedCropForSearch.isNotEmpty()) {
+                    searchCropOnGoogleImages(selectedCropForSearch)
+                }
+            }
+        }
+
+        val btnClosePreview = Button(this).apply {
+            text = "CLOSE PREVIEW"
+            textSize = 11f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#334155"))
+            setPadding(20, 14, 20, 14)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F1F5F9"))
+                cornerRadius = 12f * density
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener { backdrop.visibility = View.GONE }
+        }
+
+        body.addView(badge)
+        body.addView(previewCropImage)
+        body.addView(previewCropTitle)
+        body.addView(previewCropDesc)
+        body.addView(btnSearchCropGoogle)
+        body.addView(btnClosePreview)
+
+        card.addView(topStrip)
+        card.addView(body)
+        backdrop.addView(card)
+
+        return backdrop
+    }
+
+    private fun openCropPreviewModal(cropName: String) {
+        selectedCropForSearch = cropName
+        previewCropImage.setImageBitmap(MapGraphics.createSingleCropCardBitmap(this, cropName))
+        previewCropTitle.text = cropName
+        previewCropDesc.text = getCropDescription(cropName)
+        btnSearchCropGoogle.text = "SEARCH '${cropName.uppercase(Locale.US)}' ON GOOGLE"
+        cropPreviewOverlay.visibility = View.VISIBLE
+    }
+
+    private fun getCropDescription(cropName: String): String {
+        val c = cropName.lowercase(Locale.US)
+        return when {
+            c.contains("sugarcane") -> "Sugarcane (Tubo): Major commercial crop in Nasugbu harvested for raw sugar and molasses production."
+            c.contains("rice") -> "Rice (Palay): Staple grain grown in irrigated and lowland paddies across Nasugbu barangays."
+            c.contains("corn") -> "Corn (Mais): Cultivated for both human consumption and local agricultural supply."
+            c.contains("coconut") -> "Coconut (Niyog): Versatile coastal and upland palm tree harvested for copra, buko, and coconut oil."
+            c.contains("nipa") -> "Nipa Palm: Estuarine palm grown along riverbanks and coastal wetlands for thatch and sap."
+            c.contains("dragon fruit") -> "Dragon Fruit (Pitaya): Climbing cactus fruit with bright magenta skin and sweet seed-speckled flesh."
+            c.contains("mango") -> "Mango (Mangga): Sweet tropical stone fruit widely grown in Nasugbu orchards."
+            c.contains("banana") -> "Banana (Saging): Year-round tropical fruit crop including Saba, Lakatan, and Latundan varieties."
+            c.contains("pineapple") -> "Pineapple (Pinya): Upland tropical bromeliad fruit cultivated in elevated barangays like Aga and Kaylaway."
+            c.contains("coffee") -> "Coffee (Kape): Upland agro-forestry crop grown in cool, elevated slopes of Nasugbu."
+            c.contains("cacao") -> "Cacao: Shade-grown tropical tree whose pods produce beans for tablea and chocolate."
+            c.contains("cassava") -> "Cassava (Kamoteng Kahoy): Drought-tolerant starchy root crop harvested for food and flour."
+            c.contains("sweet potato") -> "Sweet Potato (Kamote): Nutritious creeping vine root crop grown in upland and lowland plots."
+            c.contains("cashew") -> "Cashew (Kasuy): Coastal and hillside tree prized for its roasted nuts and juicy cashew apple."
+            c.contains("watermelon") -> "Watermelon (Pakwan): Refreshing vining fruit grown in seasonal lowland plots such as Talangan."
+            c.contains("avocado") -> "Avocado: Nutrient-rich orchard fruit tree thriving in Nasugbu's upland barangays."
+            c.contains("jackfruit") -> "Jackfruit (Langka): Large tropical tree fruit used both ripe as dessert and unripe as vegetable."
+            c.contains("sayote") -> "Sayote (Chayote): Climbing vine vegetable widely cultivated in cool upland farms like Brgy. Aga."
+            else -> "$cropName: Cultivated agricultural crop in Nasugbu, Batangas. Tap below to view actual photos on Google."
+        }
+    }
+
+    private fun searchCropOnGoogleImages(cropName: String) {
+        try {
+            val encodedQuery = Uri.encode("$cropName plant crop agriculture Philippines")
+            val googleImageSearchUrl = "https://www.google.com/search?tbm=isch&q=$encodedQuery"
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(googleImageSearchUrl)))
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "No web browser app found on this device.", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Unable to search Google: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun buildMainMapScreen(): LinearLayout {
+        val density = resources.displayMetrics.density
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(22, 22, 22, 22)
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    Color.parseColor("#EEF4F0"),
+                    Color.parseColor("#F4F7FA")
+                )
+            )
+        }
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(18, 16, 18, 16)
+            elevation = 8f * density
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(
+                    Color.parseColor("#0B4F32"),
+                    Color.parseColor("#137333"),
+                    Color.parseColor("#0D5C75")
+                )
+            ).apply {
+                cornerRadius = 26f * density
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 12)
+            }
+        }
+
+        val logoBadge = FrameLayout(this).apply {
+            val badgeSize = (46 * density).toInt()
+            layoutParams = LinearLayout.LayoutParams(badgeSize, badgeSize).apply {
+                setMargins(0, 0, 12, 0)
+            }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.WHITE)
+                setStroke((2 * density).toInt(), Color.parseColor("#A8DAB5"))
+            }
+            setPadding(4, 4, 4, 4)
         }
 
         val headerLogo = ImageView(this).apply {
             setImageBitmap(MapGraphics.loadAppLogoBitmap(this@MainActivity))
             scaleType = ImageView.ScaleType.FIT_CENTER
-            val logoSizePx = (40 * resources.displayMetrics.density).toInt()
-            layoutParams = LinearLayout.LayoutParams(logoSizePx, logoSizePx).apply {
-                setMargins(0, 0, 10, 0)
-            }
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
             setOnClickListener {
                 hideFarmInfoPanel()
                 plotFarmsOnMap(autoZoomSingleMatch = false)
                 mapView.controller.animateTo(NasugbuData.center, 12.6, 500L)
             }
         }
+        logoBadge.addView(headerLogo)
 
         val titleColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { openUserProfileModal() }
         }
 
         val title = TextView(this).apply {
-            text = "NASUGBU AGRICULTURAL MAP"
-            textSize = 13.5f
+            text = "NASUGBU AGRI GIS"
+            textSize = 15f
+            letterSpacing = 0.04f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#202124"))
+            setTextColor(Color.WHITE)
         }
 
         subtitleText = TextView(this).apply {
-            text = "Tap anywhere on the map to get GPS coordinates"
-            textSize = 10f
-            setTextColor(Color.parseColor("#137333"))
+            text = "Tap map or pin for GPS & crops"
+            textSize = 10.5f
+            setTextColor(Color.parseColor("#CEEAD6"))
             setTypeface(null, Typeface.BOLD)
         }
 
@@ -223,14 +517,15 @@ class MainActivity : Activity() {
         titleColumn.addView(subtitleText)
 
         btnToggleTopBar = Button(this).apply {
-            text = "HIDE BAR ▲"
-            textSize = 9f
+            text = "HIDE ▲"
+            textSize = 9.5f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#1A73E8"))
-            setPadding(14, 6, 14, 6)
+            setTextColor(Color.WHITE)
+            setPadding(16, 8, 16, 8)
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#E8F0FE"))
-                cornerRadius = 14f
+                setColor(Color.argb(45, 255, 255, 255))
+                cornerRadius = 50f * density
+                setStroke((1 * density).toInt(), Color.argb(95, 255, 255, 255))
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -241,15 +536,15 @@ class MainActivity : Activity() {
             setOnClickListener { toggleTopControlsBar() }
         }
 
-        val btnLogout = Button(this).apply {
-            text = "SIGN IN"
-            textSize = 9f
+        btnProfile = Button(this).apply {
+            text = "PROFILE"
+            textSize = 9.5f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            setPadding(14, 6, 14, 6)
+            setTextColor(Color.parseColor("#0B4F32"))
+            setPadding(18, 8, 18, 8)
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#D93025"))
-                cornerRadius = 14f
+                setColor(Color.WHITE)
+                cornerRadius = 50f * density
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -257,16 +552,13 @@ class MainActivity : Activity() {
             ).apply {
                 setMargins(6, 0, 0, 0)
             }
-            setOnClickListener {
-                hideFarmInfoPanel()
-                loginScreen.visibility = View.VISIBLE
-            }
+            setOnClickListener { openUserProfileModal() }
         }
 
-        headerRow.addView(headerLogo)
+        headerRow.addView(logoBadge)
         headerRow.addView(titleColumn)
         headerRow.addView(btnToggleTopBar)
-        headerRow.addView(btnLogout)
+        headerRow.addView(btnProfile)
 
         topControlsContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -278,32 +570,43 @@ class MainActivity : Activity() {
 
         val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(12, 6, 10, 6)
+            elevation = 4f * density
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = 50f * density
+                setStroke((1.5f * density).toInt(), Color.parseColor("#D2E3FC"))
+            }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 0, 0, 8)
+                setMargins(0, 0, 0, 10)
             }
         }
 
         searchInput = EditText(this).apply {
-            hint = "Search barangay or crop (e.g. Lumbangan, Dayap, Tumalim)..."
+            hint = "Search barangay or crop (e.g. Tumalim, Dragon Fruit)..."
             textSize = 13f
             setSingleLine(true)
-            setPadding(24, 18, 24, 18)
-            setBackgroundColor(Color.WHITE)
+            setPadding(20, 12, 16, 12)
+            background = null
             setTextColor(Color.parseColor("#202124"))
             setHintTextColor(Color.parseColor("#80868B"))
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(0, 0, 6, 0)
-            }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
 
         val btnClearSearch = Button(this).apply {
             text = "CLEAR"
-            textSize = 10.5f
-            setBackgroundColor(Color.parseColor("#5F6368"))
-            setTextColor(Color.WHITE)
+            textSize = 10f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#3C4043"))
+            setPadding(18, 8, 18, 8)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F1F3F4"))
+                cornerRadius = 50f * density
+            }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -323,12 +626,13 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 0, 0, 8)
+                setMargins(0, 0, 0, 10)
             }
         }
 
         val filterRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            setPadding(2, 2, 2, 4)
         }
 
         val categories = listOf(
@@ -336,7 +640,8 @@ class MainActivity : Activity() {
             "SUGARCANE" to "SUGARCANE",
             "RICE" to "RICE",
             "COCONUT" to "COCONUT",
-            "FRUIT" to "PINEAPPLE / MANGO",
+            "DRAGON_FRUIT" to "DRAGON FRUIT",
+            "FRUIT" to "MANGO / FRUITS",
             "VEG" to "CORN / VEG"
         )
 
@@ -345,7 +650,8 @@ class MainActivity : Activity() {
                 text = label
                 textSize = 10f
                 setTypeface(null, Typeface.BOLD)
-                setPadding(22, 8, 22, 8)
+                setPadding(24, 10, 24, 10)
+                elevation = 2f * density
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -370,26 +676,31 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 0, 0, 8)
+                setMargins(0, 0, 0, 10)
             }
         }
 
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            setPadding(2, 2, 2, 4)
         }
 
         val btnDisplay = Button(this).apply {
-            text = "CENTER"
+            text = "CENTER MAP"
             textSize = 10f
             setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#1A73E8"))
             setTextColor(Color.WHITE)
-            setPadding(20, 10, 20, 10)
+            setPadding(22, 10, 22, 10)
+            elevation = 3f * density
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A73E8"))
+                cornerRadius = 50f * density
+            }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 0, 6, 0)
+                setMargins(0, 0, 8, 0)
             }
             setOnClickListener {
                 hideFarmInfoPanel()
@@ -398,24 +709,34 @@ class MainActivity : Activity() {
         }
 
         btnToggleLabels = Button(this).apply {
-            text = "SHOW BRGY INFO"
+            text = "SHOW BRGY CARDS"
             textSize = 10f
             setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#5F6368"))
-            setTextColor(Color.WHITE)
-            setPadding(20, 10, 20, 10)
+            setTextColor(Color.parseColor("#202124"))
+            setPadding(22, 10, 22, 10)
+            elevation = 3f * density
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = 50f * density
+                setStroke((1.5f * density).toInt(), Color.parseColor("#DADCE0"))
+            }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 0, 6, 0)
+                setMargins(0, 0, 8, 0)
             }
             setOnClickListener {
                 showMapLabels = !showMapLabels
-                text = if (showMapLabels) "HIDE BRGY INFO" else "SHOW BRGY INFO"
-                setBackgroundColor(
-                    if (showMapLabels) Color.parseColor("#E37400") else Color.parseColor("#5F6368")
-                )
+                text = if (showMapLabels) "HIDE BRGY CARDS" else "SHOW BRGY CARDS"
+                setTextColor(if (showMapLabels) Color.WHITE else Color.parseColor("#202124"))
+                background = GradientDrawable().apply {
+                    setColor(if (showMapLabels) Color.parseColor("#E37400") else Color.WHITE)
+                    cornerRadius = 50f * density
+                    if (!showMapLabels) {
+                        setStroke((1.5f * density).toInt(), Color.parseColor("#DADCE0"))
+                    }
+                }
                 plotFarmsOnMap(autoZoomSingleMatch = false, highlightedFarmName = selectedFarm?.name)
             }
         }
@@ -424,9 +745,13 @@ class MainActivity : Activity() {
             text = "SATELLITE 3D"
             textSize = 10f
             setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#137333"))
             setTextColor(Color.WHITE)
-            setPadding(20, 10, 20, 10)
+            setPadding(22, 10, 22, 10)
+            elevation = 3f * density
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#137333"))
+                cornerRadius = 50f * density
+            }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -438,13 +763,19 @@ class MainActivity : Activity() {
                         mapView.setTileSource(TileSourceFactory.MAPNIK)
                         mapView.setMapOrientation(0f)
                         text = "SATELLITE 3D"
-                        setBackgroundColor(Color.parseColor("#137333"))
+                        background = GradientDrawable().apply {
+                            setColor(Color.parseColor("#137333"))
+                            cornerRadius = 50f * density
+                        }
                     }
                     1 -> {
                         mapView.setTileSource(MapTileSources.satelliteHybrid2026)
                         mapView.controller.setZoom(14.5)
                         text = "TERRAIN 2026"
-                        setBackgroundColor(Color.parseColor("#0B57D0"))
+                        background = GradientDrawable().apply {
+                            setColor(Color.parseColor("#0B57D0"))
+                            cornerRadius = 50f * density
+                        }
                         Toast.makeText(
                             this@MainActivity,
                             "Hybrid Satellite View Active (2026 Imagery)",
@@ -454,7 +785,10 @@ class MainActivity : Activity() {
                     else -> {
                         mapView.setTileSource(MapTileSources.terrain2026)
                         text = "ROAD MAP"
-                        setBackgroundColor(Color.parseColor("#E37400"))
+                        background = GradientDrawable().apply {
+                            setColor(Color.parseColor("#E37400"))
+                            cornerRadius = 50f * density
+                        }
                     }
                 }
                 mapView.invalidate()
@@ -471,6 +805,13 @@ class MainActivity : Activity() {
         topControlsContainer.addView(buttonScroll)
 
         mapContainer = FrameLayout(this).apply {
+            elevation = 6f * density
+            setPadding(4, 4, 4, 4)
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = 24f * density
+                setStroke((2 * density).toInt(), Color.parseColor("#CEEAD6"))
+            }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -525,17 +866,32 @@ class MainActivity : Activity() {
         infoPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
-            setPadding(24, 18, 24, 18)
+            elevation = 10f * density
+            setPadding(24, 14, 24, 20)
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
-                cornerRadius = 24f
-                setStroke(2, Color.parseColor("#DADCE0"))
+                cornerRadius = 28f * density
+                setStroke((2 * density).toInt(), Color.parseColor("#CEEAD6"))
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 10, 0, 0)
+                setMargins(0, 12, 0, 0)
+            }
+        }
+
+        val dragPill = View(this).apply {
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#DADCE0"))
+                cornerRadius = 50f * density
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                (44 * density).toInt(),
+                (4 * density).toInt()
+            ).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                setMargins(0, 0, 0, 10)
             }
         }
 
@@ -546,38 +902,73 @@ class MainActivity : Activity() {
 
         infoLabel = TextView(this).apply {
             text = "BARANGAY AGRICULTURAL DETAILS"
-            textSize = 11.5f
+            textSize = 12f
+            letterSpacing = 0.03f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#137333"))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
 
         btnCloseInfo = Button(this).apply {
-            text = "HIDE ✕"
-            textSize = 10f
+            text = "CLOSE ✕"
+            textSize = 9.5f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#5F6368"))
-            setBackgroundColor(Color.parseColor("#F1F3F4"))
-            setPadding(16, 4, 16, 4)
+            setPadding(18, 6, 18, 6)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F1F3F4"))
+                cornerRadius = 50f * density
+            }
             setOnClickListener { hideFarmInfoPanel() }
         }
 
         infoHeaderRow.addView(infoLabel)
         infoHeaderRow.addView(btnCloseInfo)
 
-        resultScroll = ScrollView(this).apply {
+        cropTapHintLabel = TextView(this).apply {
+            text = "Tap any crop card below to view details & search photos on Google:"
+            textSize = 10.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#1A73E8"))
+            visibility = View.GONE
+            setPadding(0, 6, 0, 0)
+        }
+
+        cropGalleryScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 6, 0, 10)
+                setMargins(0, 6, 0, 8)
+            }
+        }
+
+        cropGalleryRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        cropGalleryScroll.addView(cropGalleryRow)
+
+        resultScroll = ScrollView(this).apply {
+            setPadding(16, 12, 16, 12)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F8FAFC"))
+                cornerRadius = 18f * density
+                setStroke((1 * density).toInt(), Color.parseColor("#E8EAED"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 4, 0, 12)
             }
         }
 
         result = TextView(this).apply {
             textSize = 12.5f
             setTextColor(Color.parseColor("#202124"))
-            setLineSpacing(4f, 1.15f)
+            setLineSpacing(5f, 1.18f)
         }
         resultScroll.addView(result)
 
@@ -589,8 +980,12 @@ class MainActivity : Activity() {
             text = "MAPS"
             textSize = 10.5f
             setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#1A73E8"))
             setTextColor(Color.WHITE)
+            setPadding(12, 12, 12, 12)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A73E8"))
+                cornerRadius = 50f * density
+            }
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 setMargins(0, 0, 6, 0)
             }
@@ -605,8 +1000,12 @@ class MainActivity : Activity() {
             text = "DIRECTIONS"
             textSize = 10.5f
             setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#137333"))
             setTextColor(Color.WHITE)
+            setPadding(12, 12, 12, 12)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#137333"))
+                cornerRadius = 50f * density
+            }
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 setMargins(0, 0, 6, 0)
             }
@@ -621,8 +1020,12 @@ class MainActivity : Activity() {
             text = "3D SATELLITE"
             textSize = 10.5f
             setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#E37400"))
             setTextColor(Color.WHITE)
+            setPadding(12, 12, 12, 12)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E37400"))
+                cornerRadius = 50f * density
+            }
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 getActiveTargetCoordinates()?.let { (lat, lng) ->
@@ -635,7 +1038,10 @@ class MainActivity : Activity() {
         actionButtonsRow.addView(btnDirections)
         actionButtonsRow.addView(btnStreetView)
 
+        infoPanel.addView(dragPill)
         infoPanel.addView(infoHeaderRow)
+        infoPanel.addView(cropTapHintLabel)
+        infoPanel.addView(cropGalleryScroll)
         infoPanel.addView(resultScroll)
         infoPanel.addView(actionButtonsRow)
 
@@ -657,6 +1063,38 @@ class MainActivity : Activity() {
         return layout
     }
 
+    private fun renderCropPicturesForFarm(farm: Farm) {
+        cropGalleryRow.removeAllViews()
+        val cropList = MapGraphics.parseBarangayCropItems(farm.crop)
+        if (cropList.isEmpty()) {
+            cropTapHintLabel.visibility = View.GONE
+            cropGalleryScroll.visibility = View.GONE
+            return
+        }
+        val gapPx = (8 * resources.displayMetrics.density).toInt()
+        for (cropName in cropList) {
+            val cropImg = ImageView(this).apply {
+                setImageBitmap(MapGraphics.createSingleCropCardBitmap(this@MainActivity, cropName))
+                adjustViewBounds = true
+                isClickable = true
+                isFocusable = true
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(0, 0, gapPx, 0)
+                }
+                setOnClickListener {
+                    openCropPreviewModal(cropName)
+                }
+            }
+            cropGalleryRow.addView(cropImg)
+        }
+        cropGalleryScroll.scrollTo(0, 0)
+        cropTapHintLabel.visibility = View.VISIBLE
+        cropGalleryScroll.visibility = View.VISIBLE
+    }
+
     private fun getActiveTargetCoordinates(): Pair<Double, Double>? {
         selectedFarm?.let { return Pair(it.lat, it.lng) }
         tappedCustomPoint?.let { return Pair(it.latitude, it.longitude) }
@@ -664,31 +1102,41 @@ class MainActivity : Activity() {
     }
 
     private fun toggleTopControlsBar() {
+        val density = resources.displayMetrics.density
         isTopBarHidden = !isTopBarHidden
         if (isTopBarHidden) {
             topControlsContainer.visibility = View.GONE
-            btnToggleTopBar.text = "SHOW BAR ▼"
-            btnToggleTopBar.setTextColor(Color.WHITE)
+            btnToggleTopBar.text = "SHOW ▼"
+            btnToggleTopBar.setTextColor(Color.parseColor("#0B4F32"))
             btnToggleTopBar.background = GradientDrawable().apply {
-                setColor(Color.parseColor("#1A73E8"))
-                cornerRadius = 14f
+                setColor(Color.parseColor("#CEEAD6"))
+                cornerRadius = 50f * density
             }
         } else {
             topControlsContainer.visibility = View.VISIBLE
-            btnToggleTopBar.text = "HIDE BAR ▲"
-            btnToggleTopBar.setTextColor(Color.parseColor("#1A73E8"))
+            btnToggleTopBar.text = "HIDE ▲"
+            btnToggleTopBar.setTextColor(Color.WHITE)
             btnToggleTopBar.background = GradientDrawable().apply {
-                setColor(Color.parseColor("#E8F0FE"))
-                cornerRadius = 14f
+                setColor(Color.argb(45, 255, 255, 255))
+                cornerRadius = 50f * density
+                setStroke((1 * density).toInt(), Color.argb(95, 255, 255, 255))
             }
         }
         mapView.invalidate()
     }
 
     private fun updateFilterChipStyles() {
+        val density = resources.displayMetrics.density
         for ((key, btn) in filterButtons) {
             val isSelected = key == activeCropFilter
-            btn.setBackgroundColor(if (isSelected) Color.parseColor("#137333") else Color.parseColor("#E8EAED"))
+            val activeBg = if (key == "DRAGON_FRUIT") Color.parseColor("#D81B60") else Color.parseColor("#137333")
+            btn.background = GradientDrawable().apply {
+                setColor(if (isSelected) activeBg else Color.WHITE)
+                cornerRadius = 50f * density
+                if (!isSelected) {
+                    setStroke((1.5f * density).toInt(), Color.parseColor("#DADCE0"))
+                }
+            }
             btn.setTextColor(if (isSelected) Color.WHITE else Color.parseColor("#3C4043"))
         }
     }
@@ -791,6 +1239,7 @@ class MainActivity : Activity() {
         selectedFarm = farm
         infoLabel.setTextColor(Color.parseColor("#137333"))
         infoLabel.text = "BRGY. ${farm.name.uppercase(Locale.US)} — DETAILS & GPS"
+        renderCropPicturesForFarm(farm)
         result.text = farm.displayInfo()
         infoPanel.visibility = View.VISIBLE
         plotFarmsOnMap(autoZoomSingleMatch = false, highlightedFarmName = farm.name)
@@ -808,6 +1257,8 @@ class MainActivity : Activity() {
 
         infoLabel.setTextColor(Color.parseColor("#1A73E8"))
         infoLabel.text = "PINNED SPOT — EXACT GPS COORDINATES"
+        cropTapHintLabel.visibility = View.GONE
+        cropGalleryScroll.visibility = View.GONE
         result.text = "Location: Nasugbu, Batangas\n" +
                 "Latitude: $latStr° N\n" +
                 "Longitude: $lngStr° E\n" +
@@ -822,6 +1273,8 @@ class MainActivity : Activity() {
         InfoWindow.closeAllInfoWindowsOn(mapView)
         selectedFarm = null
         tappedCustomPoint = null
+        cropTapHintLabel.visibility = View.GONE
+        cropGalleryScroll.visibility = View.GONE
         infoPanel.visibility = View.GONE
         plotFarmsOnMap(autoZoomSingleMatch = false, highlightedFarmName = null)
     }
